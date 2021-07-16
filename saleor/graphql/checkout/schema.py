@@ -40,11 +40,6 @@ class CheckoutQueries(graphene.ObjectType):
             description="Slug of a channel for which the data should be returned."
         ),
     )
-    checkout_line = graphene.Field(
-        CheckoutLine,
-        id=graphene.Argument(graphene.ID, description="ID of the checkout line."),
-        description="Look up a checkout line by ID.",
-    )
     checkout_lines = PrefetchingConnectionField(
         CheckoutLine, description="List of checkout lines."
     )
@@ -56,9 +51,6 @@ class CheckoutQueries(graphene.ObjectType):
     @traced_resolver
     def resolve_checkouts(self, *_args, channel=None, **_kwargs):
         return resolve_checkouts(channel)
-
-    def resolve_checkout_line(self, info, id):
-        return graphene.Node.get_node_from_global_id(info, id, CheckoutLine)
 
     @permission_required(CheckoutPermissions.MANAGE_CHECKOUTS)
     @traced_resolver

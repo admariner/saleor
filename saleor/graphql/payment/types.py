@@ -59,6 +59,7 @@ class PaymentSource(graphene.ObjectType):
         )
 
     gateway = graphene.String(description="Payment gateway name.", required=True)
+    payment_method_id = graphene.String(description="ID of stored payment method.")
     credit_card_info = graphene.Field(
         CreditCard, description="Stored credit card details if available."
     )
@@ -157,8 +158,11 @@ class Payment(CountableDjangoObjectType):
     @traced_resolver
     def resolve_credit_card(root: models.Payment, _info):
         data = {
-            "last_digits": root.cc_last_digits,
             "brand": root.cc_brand,
+            "exp_month": root.cc_exp_month,
+            "exp_year": root.cc_exp_year,
+            "first_digits": root.cc_first_digits,
+            "last_digits": root.cc_last_digits,
         }
         if not any(data.values()):
             return None

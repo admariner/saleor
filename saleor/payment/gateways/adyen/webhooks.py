@@ -42,8 +42,13 @@ from ....plugins.manager import get_plugins_manager
 from ... import ChargeStatus, PaymentError, TransactionKind
 from ...gateway import payment_refund_or_void
 from ...interface import GatewayConfig, GatewayResponse
-from ...utils import create_payment_information, create_transaction, gateway_postprocess
-from .utils.common import FAILED_STATUSES, api_call, from_adyen_price
+from ...utils import (
+    create_payment_information,
+    create_transaction,
+    gateway_postprocess,
+    price_from_minor_unit,
+)
+from .utils.common import FAILED_STATUSES, api_call
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +120,9 @@ def get_transaction(
 def create_new_transaction(notification, payment, kind):
     transaction_id = notification.get("pspReference")
     currency = notification.get("amount", {}).get("currency")
-    amount = from_adyen_price(notification.get("amount", {}).get("value"), currency)
+    amount = price_from_minor_unit(
+        notification.get("amount", {}).get("value"), currency
+    )
     is_success = True if notification.get("success") == "true" else False
 
     gateway_response = GatewayResponse(
@@ -127,7 +134,7 @@ def create_new_transaction(notification, payment, kind):
         currency=currency,
         error="",
         raw_response={},
-        searchable_key=transaction_id,
+        psp_reference=transaction_id,
     )
     return create_transaction(
         payment,
@@ -169,7 +176,7 @@ def create_order(payment, checkout, manager):
             user=checkout.user or AnonymousUser(),
         )
     except ValidationError:
-        payment_refund_or_void(payment, manager)
+        payment_refund_or_void(payment, manager, checkout_info.channel.slug)
         return None
     # Refresh the payment to assign the newly created order
     payment.refresh_from_db()
@@ -785,7 +792,7 @@ def handle_api_response(
         error=error_message,
         raw_response=response.message,
         action_required_data=response.message.get("action"),
-        searchable_key=response.message.get("pspReference", ""),
+        psp_reference=response.message.get("pspReference", ""),
     )
 
     create_transaction(

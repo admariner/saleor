@@ -504,7 +504,7 @@ def create_address(save=True):
     return address
 
 
-def create_fake_user(save=True):
+def create_fake_user(user_password, save=True):
     address = create_address(save=save)
     email = get_email(address.first_name, address.last_name)
 
@@ -519,7 +519,6 @@ def create_fake_user(save=True):
         first_name=address.first_name,
         last_name=address.last_name,
         email=email,
-        password="password",
         default_billing_address=address,
         default_shipping_address=address,
         is_active=True,
@@ -528,6 +527,7 @@ def create_fake_user(save=True):
     )
 
     if save:
+        user.set_password(user_password)
         user.save()
         user.addresses.add(address)
     return user
@@ -549,19 +549,19 @@ def create_fake_payment(mock_notify, order):
     manager = get_plugins_manager()
 
     # Create authorization transaction
-    gateway.authorize(payment, payment.token, manager)
+    gateway.authorize(payment, payment.token, manager, order.channel.slug)
     # 20% chance to void the transaction at this stage
     if random.choice([0, 0, 0, 0, 1]):
-        gateway.void(payment, manager)
+        gateway.void(payment, manager, order.channel.slug)
         return payment
     # 25% to end the payment at the authorization stage
     if not random.choice([1, 1, 1, 0]):
         return payment
     # Create capture transaction
-    gateway.capture(payment, manager)
+    gateway.capture(payment, manager, order.channel.slug)
     # 25% to refund the payment
     if random.choice([0, 0, 0, 1]):
-        gateway.refund(payment, manager)
+        gateway.refund(payment, manager, order.channel.slug)
     return payment
 
 
@@ -602,6 +602,8 @@ def create_order_lines(order, discounts, how_many=10):
                 variant=variant,
                 unit_price=unit_price,
                 total_price=total_price,
+                undiscounted_unit_price=unit_price,
+                undiscounted_total_price=total_price,
                 tax_rate=0,
             )
         )
@@ -617,13 +619,28 @@ def create_order_lines(order, discounts, how_many=10):
         unit_price = manager.calculate_order_line_unit(
             order, line, variant, variant.product
         )
+        total_price = manager.calculate_order_line_total(
+            order, line, variant, variant.product
+        )
         line.unit_price = unit_price
+        line.total_price = total_price
+        line.undiscounted_unit_price = unit_price
+        line.undiscounted_total_price = total_price
         line.tax_rate = unit_price.tax / unit_price.net
         warehouse = next(warehouse_iter)
         increase_stock(line, warehouse, line.quantity, allocate=True)
     OrderLine.objects.bulk_update(
         lines,
-        ["unit_price_net_amount", "unit_price_gross_amount", "currency", "tax_rate"],
+        [
+            "unit_price_net_amount",
+            "unit_price_gross_amount",
+            "undiscounted_unit_price_gross_amount",
+            "undiscounted_unit_price_net_amount",
+            "undiscounted_total_price_gross_amount",
+            "undiscounted_total_price_net_amount",
+            "currency",
+            "tax_rate",
+        ],
     )
     return lines
 
@@ -681,7 +698,9 @@ def create_fake_order(discounts, max_order_lines=5):
     )
     shipping_method = shipping_method_chanel_listing.shipping_method
     shipping_price = shipping_method_chanel_listing.price
-    shipping_price = manager.apply_taxes_to_shipping(shipping_price, address)
+    shipping_price = manager.apply_taxes_to_shipping(
+        shipping_price, address, channel_slug=channel.slug
+    )
     order_data.update(
         {
             "channel": channel,
@@ -727,20 +746,20 @@ def create_fake_sale():
     return sale
 
 
-def create_users(how_many=10):
+def create_users(user_password, how_many=10):
     for dummy in range(how_many):
-        user = create_fake_user()
+        user = create_fake_user(user_password)
         yield "User: %s" % (user.email,)
 
 
-def create_permission_groups():
+def create_permission_groups(staff_password):
     super_users = User.objects.filter(is_superuser=True)
     if not super_users:
-        super_users = create_staff_users(1, True)
+        super_users = create_staff_users(staff_password, 1, True)
     group = create_group("Full Access", get_permissions(), super_users)
     yield f"Group: {group}"
 
-    staff_users = create_staff_users()
+    staff_users = create_staff_users(staff_password)
     customer_support_codenames = [
         perm.codename
         for enum in [CheckoutPermissions, OrderPermissions, GiftcardPermissions]
@@ -754,7 +773,7 @@ def create_permission_groups():
     yield f"Group: {group}"
 
 
-def create_staffs():
+def create_staffs(staff_password):
     for permission in get_permissions():
         base_name = permission.codename.split("_")[1:]
 
@@ -766,7 +785,7 @@ def create_staffs():
         user_email = ".".join(email_base_name)
         user_email += ".manager@example.com"
 
-        user = _create_staff_user(email=user_email)
+        user = _create_staff_user(staff_password, email=user_email)
         group = create_group(group_name, [permission], [user])
 
         yield f"Group: {group}"
@@ -780,7 +799,7 @@ def create_group(name, permissions, users):
     return group
 
 
-def _create_staff_user(email=None, superuser=False):
+def _create_staff_user(staff_password, email=None, superuser=False):
     user = User.objects.filter(email=email).first()
     if user:
         return user
@@ -794,7 +813,7 @@ def _create_staff_user(email=None, superuser=False):
         first_name=first_name,
         last_name=last_name,
         email=email,
-        password=DUMMY_STAFF_PASSWORD,
+        password=staff_password,
         default_billing_address=address,
         default_shipping_address=address,
         is_staff=True,
@@ -804,10 +823,10 @@ def _create_staff_user(email=None, superuser=False):
     return staff_user
 
 
-def create_staff_users(how_many=2, superuser=False):
+def create_staff_users(staff_password, how_many=2, superuser=False):
     users = []
     for _ in range(how_many):
-        staff_user = _create_staff_user(superuser=superuser)
+        staff_user = _create_staff_user(staff_password, superuser=superuser)
         users.append(staff_user)
     return users
 
@@ -1188,7 +1207,7 @@ def create_warehouses():
         warehouse, _ = Warehouse.objects.update_or_create(
             name=shipping_zone_name,
             slug=slugify(shipping_zone_name),
-            defaults={"company_name": fake.company(), "address": create_address()},
+            defaults={"address": create_address()},
         )
         warehouse.shipping_zones.add(shipping_zone)
 
